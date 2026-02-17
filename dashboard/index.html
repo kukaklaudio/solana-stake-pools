@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solana Stake Pools Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a1a; color: #e0e0e0; }
+    .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 2rem; text-align: center; border-bottom: 2px solid #9945FF; }
+    .header h1 { font-size: 2rem; color: #14F195; }
+    .header .subtitle { color: #888; margin-top: 0.5rem; }
+    .stats { display: flex; justify-content: center; gap: 2rem; padding: 1.5rem; flex-wrap: wrap; }
+    .stat { background: #1a1a2e; padding: 1rem 2rem; border-radius: 12px; text-align: center; border: 1px solid #333; }
+    .stat .value { font-size: 2rem; font-weight: bold; color: #14F195; }
+    .stat .label { color: #888; font-size: 0.85rem; margin-top: 0.25rem; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 1rem; }
+    .search { width: 100%; padding: 0.75rem; background: #1a1a2e; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; font-size: 1rem; margin-bottom: 1rem; }
+    .search:focus { outline: none; border-color: #9945FF; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #1a1a2e; padding: 0.75rem; text-align: left; color: #9945FF; border-bottom: 2px solid #333; position: sticky; top: 0; cursor: pointer; }
+    th:hover { color: #14F195; }
+    td { padding: 0.75rem; border-bottom: 1px solid #222; }
+    tr:hover td { background: #1a1a2e; }
+    .pool-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; margin: 1px; }
+    .pool-badge.eligible { background: #14F19520; color: #14F195; border: 1px solid #14F19540; }
+    .pool-badge.not-eligible { background: #ff444420; color: #ff4444; border: 1px solid #ff444440; }
+    .loading { text-align: center; padding: 4rem; color: #888; }
+    .footer { text-align: center; padding: 2rem; color: #666; font-size: 0.8rem; }
+    .footer a { color: #9945FF; }
+    .validator-name { color: #14F195; font-weight: 500; }
+    .commission { color: #ffa500; }
+    .stake { color: #9945FF; }
+    .score { font-weight: bold; }
+    .score.high { color: #14F195; }
+    .score.mid { color: #ffa500; }
+    .score.low { color: #ff4444; }
+    .pool-img { width: 20px; height: 20px; border-radius: 4px; vertical-align: middle; margin-right: 4px; }
+    .filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .filter-btn { padding: 0.4rem 1rem; background: #1a1a2e; border: 1px solid #333; border-radius: 6px; color: #888; cursor: pointer; font-size: 0.85rem; }
+    .filter-btn.active { border-color: #9945FF; color: #9945FF; }
+    .filter-btn:hover { border-color: #14F195; color: #14F195; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🔮 Solana Stake Pools Dashboard</h1>
+    <p class="subtitle">Auto-updating validator eligibility tracker</p>
+    <p class="subtitle" id="last-update">Loading...</p>
+  </div>
+
+  <div class="stats" id="stats">
+    <div class="stat"><div class="value" id="epoch">-</div><div class="label">Current Epoch</div></div>
+    <div class="stat"><div class="value" id="validators">-</div><div class="label">Validators</div></div>
+    <div class="stat"><div class="value" id="pools">-</div><div class="label">Stake Pools</div></div>
+    <div class="stat"><div class="value" id="total-stake">-</div><div class="label">Total Stake (SOL)</div></div>
+  </div>
+
+  <div class="container">
+    <input type="text" class="search" id="search" placeholder="🔍 Search by validator name, vote account, or identity...">
+    
+    <div class="filters" id="filters"></div>
+
+    <div id="content">
+      <div class="loading">⏳ Loading stake pool data from upstream...</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <p>Data source: <a href="https://github.com/SOFZP/Solana-Stake-Pools-Research">SOFZP/Solana-Stake-Pools-Research</a> | 
+    Fork by <a href="https://github.com/kukaklaudio/solana-stake-pools">kukaklaudio</a> for <a href="https://superteam.fun">Superteam Brazil</a></p>
+    <p>Dashboard auto-updates every 2 hours via GitHub Actions</p>
+  </div>
+
+  <script>
+    const MANIFEST_URL = 'https://raw.githubusercontent.com/SOFZP/Solana-Stake-Pools-Research/main/stakepool-data/mainnet-beta/manifest.json';
+    let allValidators = [];
+    let poolDefs = [];
+    let currentSort = { col: 'total_stake', dir: 'desc' };
+
+    async function init() {
+      try {
+        const manifest = await fetch(MANIFEST_URL).then(r => r.json());
+        const data = await fetch(manifest.latest_data_url).then(r => r.json());
+        
+        poolDefs = data.pool_definitions || [];
+        allValidators = data.validators || [];
+        
+        document.getElementById('epoch').textContent = data.metadata.epoch;
+        document.getElementById('validators').textContent = allValidators.length.toLocaleString();
+        document.getElementById('pools').textContent = poolDefs.length;
+        document.getElementById('last-update').textContent = `Last update: ${new Date(data.metadata.timestamp_utc).toLocaleString()}`;
+        
+        const totalStake = allValidators.reduce((s, v) => s + (v.active_stake_sol || 0), 0);
+        document.getElementById('total-stake').textContent = (totalStake / 1e6).toFixed(1) + 'M';
+
+        buildFilters();
+        renderTable();
+        
+        document.getElementById('search').addEventListener('input', renderTable);
+      } catch (e) {
+        document.getElementById('content').innerHTML = `<div class="loading">❌ Error loading data: ${e.message}</div>`;
+      }
+    }
+
+    function buildFilters() {
+      const groups = [...new Set(poolDefs.map(p => p.group))].sort();
+      const container = document.getElementById('filters');
+      container.innerHTML = '<button class="filter-btn active" data-filter="all">All Pools</button>';
+      groups.forEach(g => {
+        container.innerHTML += `<button class="filter-btn" data-filter="${g}">${g.replace(/_/g, ' ')}</button>`;
+      });
+      container.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          container.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          renderTable();
+        });
+      });
+    }
+
+    function renderTable() {
+      const query = document.getElementById('search').value.toLowerCase();
+      const activeFilter = document.querySelector('.filter-btn.active')?.dataset.filter || 'all';
+      
+      let filtered = allValidators.filter(v => {
+        if (!query) return true;
+        return (v.name || '').toLowerCase().includes(query) ||
+               (v.vote_account || '').toLowerCase().includes(query) ||
+               (v.identity || '').toLowerCase().includes(query);
+      });
+
+      filtered.sort((a, b) => {
+        let va = a[currentSort.col] || 0;
+        let vb = b[currentSort.col] || 0;
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        return currentSort.dir === 'desc' ? (vb > va ? 1 : -1) : (va > vb ? 1 : -1);
+      });
+
+      const relevantPools = activeFilter === 'all' ? poolDefs : poolDefs.filter(p => p.group === activeFilter);
+
+      let html = `<table><thead><tr>
+        <th onclick="sortBy('name')">Validator</th>
+        <th onclick="sortBy('active_stake_sol')">Active Stake</th>
+        <th onclick="sortBy('commission')">Commission</th>
+        <th>Pool Eligibility</th>
+      </tr></thead><tbody>`;
+
+      filtered.slice(0, 500).forEach(v => {
+        const pools = (v.pool_memberships || []);
+        const poolHtml = relevantPools.map(p => {
+          const membership = pools.find(m => m.pool_short_name === p.short_name);
+          if (membership) {
+            const stakeStr = membership.delegated_stake_sol ? ` (${(membership.delegated_stake_sol/1000).toFixed(0)}k)` : '';
+            return `<span class="pool-badge eligible" title="${p.long_name}: ${stakeStr}">${p.short_name}${stakeStr}</span>`;
+          }
+          return '';
+        }).filter(Boolean).join('');
+
+        const stake = v.active_stake_sol ? (v.active_stake_sol / 1000).toFixed(0) + 'k' : '-';
+        
+        html += `<tr>
+          <td><span class="validator-name">${v.name || v.vote_account?.slice(0,8) || '?'}</span><br><small style="color:#666">${(v.vote_account || '').slice(0,16)}...</small></td>
+          <td class="stake">${stake} SOL</td>
+          <td class="commission">${v.commission ?? '-'}%</td>
+          <td>${poolHtml || '<span style="color:#666">None</span>'}</td>
+        </tr>`;
+      });
+
+      html += '</tbody></table>';
+      if (filtered.length > 500) html += `<p style="text-align:center;color:#888;padding:1rem">Showing 500 of ${filtered.length} validators</p>`;
+      
+      document.getElementById('content').innerHTML = html;
+    }
+
+    function sortBy(col) {
+      if (currentSort.col === col) currentSort.dir = currentSort.dir === 'desc' ? 'asc' : 'desc';
+      else { currentSort.col = col; currentSort.dir = 'desc'; }
+      renderTable();
+    }
+
+    init();
+  </script>
+</body>
+</html>
